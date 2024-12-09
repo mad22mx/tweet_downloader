@@ -15,6 +15,8 @@ from bs4 import BeautifulSoup
 
 from dotenv import load_dotenv
 import os
+import subprocess
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -51,22 +53,23 @@ async def is_user_member_of_channel(context: ContextTypes.DEFAULT_TYPE, user_id:
 async def fetch_twitter_content(link_to_download):
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36"
     chrome_options = Options()
-    chrome_options.add_argument('--no-sandbox')
+    #chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
+    #chrome_options.add_argument('--disable-dev-shm-usage')
+    #chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument(f'user-agent={user_agent}')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--start-maximized')
+    #chrome_options.add_argument('--window-size=1920,1080')
+    #chrome_options.add_argument('--start-maximized')
     chrome_options.add_argument('--allow-running-insecure-content')
     chrome_options.add_argument('--disable-extensions')
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     
     try:
+        print("link_to_download:", link_to_download)
         driver.get(link_to_download)
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 15)
         tweet_text_element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'article div[data-testid="tweetText"]')))
         tweet_html = tweet_text_element.get_attribute('innerHTML')
 
@@ -74,7 +77,11 @@ async def fetch_twitter_content(link_to_download):
         tweet_text = ''.join(element if isinstance(element, str) else element.get_text() if element.name != 'img' else element['alt'] for element in soup.contents)
 
         # Check for video
-        video_elements = driver.find_elements(By.CSS_SELECTOR, 'video')
+        video_elements = None
+        try:
+            video_elements = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'video')))
+        except Exception:
+            print("No video was found!")
         if video_elements:
             # Navigate to the video download site
             driver.get('https://ssstwitter.com/en')
@@ -89,11 +96,9 @@ async def fetch_twitter_content(link_to_download):
             for link in download_links.find_elements(By.CSS_SELECTOR, '.download_link'):
                 url = link.get_attribute('href')
                 quality = link.text.split()[-1]
-                
-                if quality == "1280x720":
-                    continue
-                video_links.append([quality, url])
-
+                if url is not None and "result_normal" not in str(url) and "#" not in str(url):
+                    video_links.append([quality, url])
+            print(tweet_text, video_links)
             return tweet_text, {'type': 'video', 'links': video_links}
 
         # Check for pictures
@@ -110,14 +115,18 @@ async def fetch_twitter_content(link_to_download):
         driver.quit()
 
 def download_file(url):
-    local_filename = url.split('/')[-1]
+    current_time = datetime.now()
+    formatted_time = current_time.strftime("%Y%m%d%H%M%S")
+    local_filename = formatted_time + ".mp4"
     try:
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(local_filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        return local_filename
+        command = ["ffmpeg", "-headers", "User-Agent: Mozilla/5.0", "-i", url, "-c", "copy", local_filename]
+        try:
+            subprocess.run(command, check=True)
+            print(f"Downloaded successfully to {local_filename}")
+            return local_filename
+        except subprocess.CalledProcessError as e:
+            print(f"Error occurred: {e}")
+
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
         return None
